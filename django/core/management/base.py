@@ -259,6 +259,8 @@ class BaseCommand(object):
         parse the arguments to this command.
 
         """
+
+        # print "prog="+ prog_name, "usage=" +self.usage(subcommand), "version="+self.get_version(), "option_list="+self.option_list
         return OptionParser(prog=prog_name,
                             usage=self.usage(subcommand),
                             version=self.get_version(),
@@ -282,8 +284,10 @@ class BaseCommand(object):
         ``Exception`` is not ``CommandError``, raise it.
         """
         parser = self.create_parser(argv[0], argv[1])
+
         options, args = parser.parse_args(argv[2:])
         handle_default_options(options)
+
         try:
             self.execute(*args, **options.__dict__)
         except Exception as e:

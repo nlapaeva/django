@@ -342,7 +342,7 @@ class BaseDatabaseCreation(object):
             ";",
         ]
 
-    def create_test_db(self, verbosity=1, autoclobber=False, serialize=True):
+    def create_test_db(self, verbosity=1, autoclobber=False, serialize=True, keepdb=False):
         """
         Creates a test database, prompting the user for confirmation if the
         database already exists. Returns the name of the test database created.
@@ -354,12 +354,23 @@ class BaseDatabaseCreation(object):
 
         if verbosity >= 1:
             test_db_repr = ''
+            action = 'Creating'
+            if keepdb:
+                action = "Using existing"
+
             if verbosity >= 2:
                 test_db_repr = " ('%s')" % test_database_name
-            print("Creating test database for alias '%s'%s..." % (
+            print("%s test database for alias '%s'%s..." % (
+                action,
                 self.connection.alias, test_db_repr))
 
-        self._create_test_db(verbosity, autoclobber)
+        # We could skip this call if keepdb is True, but we instead
+        # give it the keepdb param. This is to handle the case
+        # where the test DB doesn't exist, in which case we need to
+        # create it, then just not destroy it. If we instead skip
+        # this, we will get an exception.
+
+        self._create_test_db(verbosity, autoclobber, keepdb)
 
         self.connection.close()
         settings.DATABASES[self.connection.alias]["NAME"] = test_database_name
@@ -441,7 +452,7 @@ class BaseDatabaseCreation(object):
             return self.connection.settings_dict['TEST']['NAME']
         return TEST_DATABASE_PREFIX + self.connection.settings_dict['NAME']
 
-    def _create_test_db(self, verbosity, autoclobber):
+    def _create_test_db(self, verbosity, autoclobber, keepdb=False):
         """
         Internal implementation - creates the test db tables.
         """
@@ -457,6 +468,8 @@ class BaseDatabaseCreation(object):
                 cursor.execute(
                     "CREATE DATABASE %s %s" % (qn(test_database_name), suffix))
             except Exception as e:
+                if keepdb:
+                    return test_database_name
                 sys.stderr.write(
                     "Got an error creating the test database: %s\n" % e)
                 if not autoclobber:
@@ -483,21 +496,53 @@ class BaseDatabaseCreation(object):
 
         return test_database_name
 
-    def destroy_test_db(self, old_database_name, verbosity=1):
+    def destroy_test_db(self, old_database_name=None, verbosity=1, keepdb=False, number=None):
         """
         Destroy a test database, prompting the user for confirmation if the
         database already exists.
         """
         self.connection.close()
-        test_database_name = self.connection.settings_dict['NAME']
+
+
+        # add from Django 1.9
+        if number is None:
+            test_database_name = self.connection.settings_dict['NAME']
+        else:
+            test_database_name = self.get_test_db_clone_settings(number)['NAME']
+
+        # old implementation
+        # test_database_name = self.connection.settings_dict['NAME']
+        # if verbosity >= 1:
+        #     test_db_repr = ''
+        #     if verbosity >= 2:
+        #         test_db_repr = " ('%s')" % test_database_name
+        #     print("Destroying test database for alias '%s'%s..." % (
+        #         self.connection.alias, test_db_repr))
+
         if verbosity >= 1:
-            test_db_repr = ''
-            if verbosity >= 2:
-                test_db_repr = " ('%s')" % test_database_name
-            print("Destroying test database for alias '%s'%s..." % (
-                self.connection.alias, test_db_repr))
+            action = 'Destroying'
+            if keepdb:
+                action = 'Preserving'
+            # if verbosity >= 2:
+            #     test_db_repr = " ('%s')" % test_database_name
+            print("%s test database for alias %s..." % (
+                action,
+                self._get_database_display_str(verbosity, test_database_name),
+            ))
+        if old_database_name is not None:
+            settings.DATABASES[self.connection.alias]["NAME"] = old_database_name
+            self.connection.settings_dict["NAME"] = old_database_name
 
         self._destroy_test_db(test_database_name, verbosity)
+
+    def _get_database_display_str(self, verbosity, database_name):
+        """
+        Return display string for a database for use in various actions.
+        """
+        return "'%s'%s" % (
+            self.connection.alias,
+            (" ('%s')" % database_name) if verbosity >= 2 else '',
+        )
 
     def _destroy_test_db(self, test_database_name, verbosity):
         """
@@ -507,6 +552,7 @@ class BaseDatabaseCreation(object):
         # ourselves. Connect to the previous database (not the test database)
         # to do so, because it's not allowed to delete a database while being
         # connected to it.
+
         with self._nodb_connection.cursor() as cursor:
             # Wait to avoid "database is being accessed by other users" errors.
             time.sleep(1)
@@ -543,3 +589,42 @@ class BaseDatabaseCreation(object):
             settings_dict['ENGINE'],
             settings_dict['NAME']
         )
+# Add from Django 1.9
+    def clone_test_db(self, number, verbosity=1, autoclobber=False, keepdb=False):
+        """
+        Clone a test database.
+        """
+        source_database_name = self.connection.settings_dict['NAME']
+
+        if verbosity >= 1:
+            action = 'Cloning test database'
+            if keepdb:
+                action = 'Using existing clone'
+            print("%s for alias %s..." % (
+                action,
+                self._get_database_display_str(verbosity, source_database_name),
+            ))
+
+        # We could skip this call if keepdb is True, but we instead
+        # give it the keepdb param. See create_test_db for details.
+        self._clone_test_db(number, verbosity, keepdb) #, keepdb
+
+    def get_test_db_clone_settings(self, number):
+        """
+        Return a modified connection settings dict for the n-th clone of a DB.
+        """
+        # When this function is called, the test database has been created
+        # already and its name has been copied to settings_dict['NAME'] so
+        # we don't need to call _get_test_db_name.
+        orig_settings_dict = self.connection.settings_dict
+        new_settings_dict = orig_settings_dict.copy()
+        new_settings_dict['NAME'] = '{}_{}'.format(orig_settings_dict['NAME'], number)
+        return new_settings_dict
+
+    def _clone_test_db(self, number, verbosity, keepdb=False):
+        """
+        Internal implementation - duplicate the test db tables.
+        """
+        raise NotImplementedError(
+            "The database backend doesn't support cloning databases. "
+            "Disable the option to run tests in parallel processes.")
