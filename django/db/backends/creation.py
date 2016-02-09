@@ -91,7 +91,7 @@ class BaseDatabaseCreation(object):
                 continue
             # Make the definition (e.g. 'foo VARCHAR(30)') for this field.
             field_output = [style.SQL_FIELD(qn(f.column)),
-                style.SQL_COLTYPE(col_type)]
+                            style.SQL_COLTYPE(col_type)]
             # Oracle treats the empty string ('') as null, so coerce the null
             # option whenever '' is a possible value.
             null = f.null
@@ -124,9 +124,9 @@ class BaseDatabaseCreation(object):
             table_output.append(' '.join(field_output))
         for field_constraints in opts.unique_together:
             table_output.append(style.SQL_KEYWORD('UNIQUE') + ' (%s)' %
-                ", ".join(
-                    [style.SQL_FIELD(qn(opts.get_field(f).column))
-                     for f in field_constraints]))
+                                ", ".join(
+                                    [style.SQL_FIELD(qn(opts.get_field(f).column))
+                                     for f in field_constraints]))
 
         full_statement = [style.SQL_KEYWORD('CREATE TABLE') + ' ' +
                           style.SQL_TABLE(qn(opts.db_table)) + ' (']
@@ -162,11 +162,11 @@ class BaseDatabaseCreation(object):
         rel_to = field.rel.to
         if rel_to in known_models or rel_to == model:
             output = [style.SQL_KEYWORD('REFERENCES') + ' ' +
-                style.SQL_TABLE(qn(rel_to._meta.db_table)) + ' (' +
-                style.SQL_FIELD(qn(rel_to._meta.get_field(
-                    field.rel.field_name).column)) + ')' +
-                self.connection.ops.deferrable_sql()
-            ]
+                      style.SQL_TABLE(qn(rel_to._meta.db_table)) + ' (' +
+                      style.SQL_FIELD(qn(rel_to._meta.get_field(
+                          field.rel.field_name).column)) + ')' +
+                      self.connection.ops.deferrable_sql()
+                     ]
             pending = False
         else:
             # We haven't yet created the table to which this field
@@ -197,11 +197,11 @@ class BaseDatabaseCreation(object):
                 r_name = '%s_refs_%s_%s' % (
                     r_col, col, self._digest(r_table, table))
                 final_output.append(style.SQL_KEYWORD('ALTER TABLE') +
-                    ' %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)%s;' %
-                    (qn(r_table), qn(truncate_name(
-                        r_name, self.connection.ops.max_name_length())),
-                    qn(r_col), qn(table), qn(col),
-                    self.connection.ops.deferrable_sql()))
+                                    ' %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)%s;' %
+                                    (qn(r_table), qn(truncate_name(
+                                        r_name, self.connection.ops.max_name_length())),
+                                     qn(r_col), qn(table), qn(col),
+                                     self.connection.ops.deferrable_sql()))
             del pending_references[model]
         return final_output
 
@@ -413,11 +413,11 @@ class BaseDatabaseCreation(object):
         loader = MigrationLoader(self.connection)
         app_list = []
         for app_config in apps.get_app_configs():
-            if (
-                app_config.models_module is not None and
-                app_config.label in loader.migrated_apps and
-                app_config.name not in settings.TEST_NON_SERIALIZED_APPS
-            ):
+            if  (
+                    app_config.models_module is not None and
+                    app_config.label in loader.migrated_apps and
+                    app_config.name not in settings.TEST_NON_SERIALIZED_APPS
+                ):
                 app_list.append((app_config, None))
 
         # Make a function to iteratively return every object
@@ -510,21 +510,10 @@ class BaseDatabaseCreation(object):
         else:
             test_database_name = self.get_test_db_clone_settings(number)['NAME']
 
-        # old implementation
-        # test_database_name = self.connection.settings_dict['NAME']
-        # if verbosity >= 1:
-        #     test_db_repr = ''
-        #     if verbosity >= 2:
-        #         test_db_repr = " ('%s')" % test_database_name
-        #     print("Destroying test database for alias '%s'%s..." % (
-        #         self.connection.alias, test_db_repr))
-
         if verbosity >= 1:
             action = 'Destroying'
             if keepdb:
                 action = 'Preserving'
-            # if verbosity >= 2:
-            #     test_db_repr = " ('%s')" % test_database_name
             print("%s test database for alias %s..." % (
                 action,
                 self._get_database_display_str(verbosity, test_database_name),
@@ -533,7 +522,7 @@ class BaseDatabaseCreation(object):
             settings.DATABASES[self.connection.alias]["NAME"] = old_database_name
             self.connection.settings_dict["NAME"] = old_database_name
 
-        self._destroy_test_db(test_database_name, verbosity)
+        self._destroy_test_db(test_database_name)
 
     def _get_database_display_str(self, verbosity, database_name):
         """
@@ -544,7 +533,7 @@ class BaseDatabaseCreation(object):
             (" ('%s')" % database_name) if verbosity >= 2 else '',
         )
 
-    def _destroy_test_db(self, test_database_name, verbosity):
+    def _destroy_test_db(self, test_database_name):
         """
         Internal implementation - remove the test db tables.
         """
@@ -589,8 +578,9 @@ class BaseDatabaseCreation(object):
             settings_dict['ENGINE'],
             settings_dict['NAME']
         )
+
 # Add from Django 1.9
-    def clone_test_db(self, number, verbosity=1, autoclobber=False, keepdb=False):
+    def clone_test_db(self, number, verbosity=1, keepdb=False):
         """
         Clone a test database.
         """

@@ -1,3 +1,4 @@
+import sys
 from django.db.backends.creation import BaseDatabaseCreation
 from django.db.backends.utils import truncate_name
 
@@ -96,9 +97,12 @@ class DatabaseCreation(BaseDatabaseCreation):
             try:
                 cursor.execute("CREATE DATABASE %s WITH TEMPLATE %s" % (
                     qn(target_database_name), qn(source_database_name)))
+
             except Exception as e:
                 if keepdb:
                     return
+                sys.stderr.write(
+                    "Got an error creating the test database: %s\n" % e)
                 try:
                     if verbosity >= 1:
                         print("Destroying old test database for alias %s..." % (

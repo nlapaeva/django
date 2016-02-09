@@ -3,11 +3,12 @@ import itertools
 import os
 import collections
 import ctypes
-
+import pickle
+import textwrap
+import unittest
 
 from importlib import import_module
 from optparse import make_option
-import unittest
 from unittest import TestSuite, defaultTestLoader
 
 from django.conf import settings
@@ -25,46 +26,6 @@ except ImportError:
     tblib = None
 
 
-
-
-class DebugSQLTextTestResult(unittest.TextTestResult):
-    def __init__(self, stream, descriptions, verbosity):
-        self.logger = logging.getLogger('django.db.backends')
-        self.logger.setLevel(logging.DEBUG)
-        super(DebugSQLTextTestResult, self).__init__(stream, descriptions, verbosity)
-
-    def startTest(self, test):
-        self.debug_sql_stream = StringIO()
-        self.handler = logging.StreamHandler(self.debug_sql_stream)
-        self.logger.addHandler(self.handler)
-        super(DebugSQLTextTestResult, self).startTest(test)
-
-    def stopTest(self, test):
-        super(DebugSQLTextTestResult, self).stopTest(test)
-        self.logger.removeHandler(self.handler)
-        if self.showAll:
-            self.debug_sql_stream.seek(0)
-            self.stream.write(self.debug_sql_stream.read())
-            self.stream.writeln(self.separator2)
-
-    def addError(self, test, err):
-        super(DebugSQLTextTestResult, self).addError(test, err)
-        self.debug_sql_stream.seek(0)
-        self.errors[-1] = self.errors[-1] + (self.debug_sql_stream.read(),)
-
-    def addFailure(self, test, err):
-        super(DebugSQLTextTestResult, self).addFailure(test, err)
-        self.debug_sql_stream.seek(0)
-        self.failures[-1] = self.failures[-1] + (self.debug_sql_stream.read(),)
-
-    def printErrorList(self, flavour, errors):
-        for test, err, sql_debug in errors:
-            self.stream.writeln(self.separator1)
-            self.stream.writeln("%s: %s" % (flavour, self.getDescription(test)))
-            self.stream.writeln(self.separator2)
-            self.stream.writeln("%s" % err)
-            self.stream.writeln(self.separator2)
-            self.stream.writeln("%s" % sql_debug)
 # import from django 1.9
 def default_test_processes():
     """
@@ -80,6 +41,7 @@ def default_test_processes():
     except KeyError:
         return multiprocessing.cpu_count()
 _worker_id = 0
+
 
 # add from Django 1.9
 class RemoteTestResult(object):
@@ -110,6 +72,7 @@ class RemoteTestResult(object):
         # the root cause easier to figure out for users who aren't familiar
         # with the multiprocessing module. Since we're in a forked process,
         # our best chance to communicate with them is to print to stdout.
+
         try:
             pickle.dumps(err)
         except Exception as exc:
@@ -117,37 +80,22 @@ class RemoteTestResult(object):
             original_exc_txt = textwrap.fill(original_exc_txt, 75, initial_indent='    ', subsequent_indent='    ')
             pickle_exc_txt = repr(exc)
             pickle_exc_txt = textwrap.fill(pickle_exc_txt, 75, initial_indent='    ', subsequent_indent='    ')
+
             if tblib is None:
-                print("""
-
-{} failed:
-
-{}
-
-Unfortunately, tracebacks cannot be pickled, making it impossible for the
-parallel test runner to handle this exception cleanly.
-
-In order to see the traceback, you should install tblib:
-
-    pip install tblib
-""".format(test, original_exc_txt))
+                err_str = "%s failed:" % (test) + "\n\n"+"%s" %(original_exc_txt) + "\n\n" \
+                          + "Unfortunately, tracebacks cannot be pickled, making it impossible for the\n" \
+                          + "parallel test runner to handle this exception cleanly.\n\n" \
+                          + "In order to see the traceback, you should install tblib:\n\n\t pip install tblib"
+                print (err_str)
             else:
-                print("""
-
-{} failed:
-
-{}
-
-Unfortunately, the exception it raised cannot be pickled, making it impossible
-for the parallel test runner to handle it cleanly.
-
-Here's the error encountered while trying to pickle the exception:
-
-{}
-
-You should re-run this test without the --parallel option to reproduce the
-failure and get a correct traceback.
-""".format(test, original_exc_txt, pickle_exc_txt))
+                err_str = "%s failed:" % (test) + "\n\n"+"%s" %(original_exc_txt) + "\n\n" \
+                          + "Unfortunately, the exception it raised cannot be pickled, making it impossible\n" \
+                          + "or the parallel test runner to handle it cleanly..\n\n" \
+                          + "Here's the error encountered while trying to pickle the exception:" \
+                          + "\n\n%s\n\n" % (pickle_exc_txt) \
+                          + "You should re-run this test without the --parallel option to reproduce the\n" \
+                          + "failure and get a correct traceback."
+                print (err_str)
             raise
 
     def stop_if_failfast(self):
@@ -202,6 +150,8 @@ failure and get a correct traceback.
     def addUnexpectedSuccess(self, test):
         self.events.append(('addUnexpectedSuccess', self.test_index))
         self.stop_if_failfast()
+
+
 # Add from Django 1.9
 class RemoteTestRunner(object):
     """
@@ -223,6 +173,8 @@ class RemoteTestRunner(object):
         result.failfast = self.failfast
         test(result)
         return result
+
+
 # Add from Django 1.9
 def _init_worker(counter):
     """
@@ -260,6 +212,7 @@ def _run_subsuite(args):
     runner = RemoteTestRunner(failfast=failfast)
     result = runner.run(subsuite)
     return subsuite_index, result.events
+
 
 # Add from Django 1.9
 class ParallelTestSuite(unittest.TestSuite):
@@ -321,18 +274,13 @@ class ParallelTestSuite(unittest.TestSuite):
             if result.shouldStop:
                 pool.terminate()
                 break
-
             try:
-
                 subsuite_index, events = test_results.next(timeout=0.1)
             except multiprocessing.TimeoutError:
                 continue
             except StopIteration:
                 pool.close()
                 break
-            except:
-                print "unhandle error"
-                continue
 
             tests = list(self.subsuites[subsuite_index])
             for event in events:
@@ -343,12 +291,8 @@ class ParallelTestSuite(unittest.TestSuite):
                 test = tests[event[1]]
                 args = event[2:]
                 handler(test, *args)
-
         pool.join()
-
         return result
-
-
 
 
 class DiscoverRunner(object):
@@ -363,17 +307,17 @@ class DiscoverRunner(object):
     reorder_by = (TestCase, SimpleTestCase)
     option_list = (
         make_option('-t', '--top-level-directory',
-            action='store', dest='top_level', default=None,
-            help='Top level of project for unittest discovery.'),
+                    action='store', dest='top_level', default=None,
+                    help='Top level of project for unittest discovery.'),
         make_option('-p', '--pattern', action='store', dest='pattern',
-            default="test*.py",
-            help='The test matching pattern. Defaults to test*.py.'),
-        make_option ( '--keepdb',  action='store_true', dest='keepdb', # add new option
-            default=False,
-            help='Preserves the test DB between runs.'),
-        make_option ( '--parallel', dest='parallel', nargs=1, default=0, type="int", # add new option
-             metavar='N', #const=default_test_processes(),          #    const is not work in action=store in make_option. parallel should always get a parameter
-            help='Run tests using up to N parallel processes.')
+                    default="test*.py",
+                    help='The test matching pattern. Defaults to test*.py.'),
+        make_option('--keepdb', action='store_true', dest='keepdb', # add new option
+                    default=False,
+                    help='Preserves the test DB between runs.'),
+        make_option('--parallel', dest='parallel', nargs=1, default=0, type="int", # add new option
+                    metavar='N', #const=default_test_processes(),          #    const is not work in action=store in make_option. parallel should always get a parameter
+                    help='Run tests using up to N parallel processes.')
     )
 
     def __init__(self, pattern=None, top_level=None,
@@ -386,15 +330,13 @@ class DiscoverRunner(object):
         self.interactive = interactive
         self.failfast = failfast
         self.parallel = parallel  # add
-        self.keepdb = keepdb
+        self.keepdb = keepdb   # add
 
     def setup_test_environment(self, **kwargs):
         setup_test_environment()
         settings.DEBUG = False
         unittest.installHandler()
 
-    # def get_resultclass(self):
-    #     return DebugSQLTextTestResult if self.debug_sql else None
 
 # Change To Django 1.9
     def build_suite(self, test_labels=None, extra_tests=None, **kwargs):
@@ -456,7 +398,6 @@ class DiscoverRunner(object):
         for test in extra_tests:
             suite.addTest(test)
 
-        #return reorder_suite(suite, self.reorder_by)
         # add from Django 1.9
         suite = reorder_suite(suite, self.reorder_by)
 
@@ -481,12 +422,11 @@ class DiscoverRunner(object):
         return setup_databases(self.verbosity, self.interactive, self.keepdb, self.parallel, **kwargs)
 
     def run_suite(self, suite, **kwargs):
-        #resultclass = self.get_resultclass()
         return self.test_runner(
             verbosity=self.verbosity,
             failfast=self.failfast,
-     #       resultclass=resultclass,
         ).run(suite)
+
 
 # change to Django 1.9
     def teardown_databases(self, old_config, **kwargs):
@@ -503,15 +443,6 @@ class DiscoverRunner(object):
                             keepdb=self.keepdb,
                         )
                 connection.creation.destroy_test_db(old_name, self.verbosity, self.keepdb)
-    # old
-    # def teardown_databases(self, old_config, **kwargs):
-    #     """
-    #     Destroys all the non-mirror databases.
-    #     """
-    #     old_names, mirrors = old_config
-    #     for connection, old_name, destroy in old_names:
-    #         if destroy:
-    #             connection.creation.destroy_test_db(old_name, self.verbosity)
 
     def teardown_test_environment(self, **kwargs):
         unittest.removeHandler()
@@ -539,8 +470,6 @@ class DiscoverRunner(object):
         self.teardown_databases(old_config)
         self.teardown_test_environment()
         return self.suite_result(suite, result)
-
-
 
 
 def is_discoverable(label):
@@ -600,6 +529,7 @@ def dependency_ordered(test_databases, dependencies):
         test_databases = deferred
     return ordered_test_databases
 
+
 # Changed to Django 1.9
 def reorder_suite(suite, classes):
     """
@@ -613,40 +543,14 @@ def reorder_suite(suite, classes):
     class_count = len(classes)
     suite_class = type(suite)
 
-   # bins = [suite_class() for i in range(class_count + 1)]
-
     bins = [OrderedSet() for i in range(class_count + 1)]
     partition_suite_by_type(suite, classes, bins)
-    # for i in range(class_count):
-    #     bins[0].add(bins[i + 1])
-    # return bins[0]
+
     reordered_suite = suite_class()
     for i in range(class_count + 1):
         reordered_suite.addTests(bins[i])
     return reordered_suite
 
-#
-# def partition_suite(suite, classes, bins):
-#     """
-#     Partitions a test suite by test type.
-#
-#     classes is a sequence of types
-#     bins is a sequence of TestSuites, one more than classes
-#
-#     Tests of type classes[i] are added to bins[i],
-#     tests with no match found in classes are place in bins[-1]
-#     """
-#     suite_class = type(suite)
-#     for test in suite:
-#         if isinstance(test, suite_class):
-#             partition_suite(test, classes, bins)
-#         else:
-#             for i in range(len(classes)):
-#                 if isinstance(test, classes[i]):
-#                     bins[i].add(test)
-#                     break
-#             else:
-#                 bins[-1].add(test)
 
 # add from Django 1.9
 def partition_suite_by_case(suite):
@@ -662,6 +566,7 @@ def partition_suite_by_case(suite):
             for item in test_group:
                 groups.extend(partition_suite_by_case(item))
     return groups
+
 
 # add from Django 1.9
 def partition_suite_by_type(suite, classes, bins):
@@ -687,6 +592,7 @@ def partition_suite_by_type(suite, classes, bins):
                     break
             else:
                 bins[-1].add(test)
+
 
 # Add from Django 1.9
 def get_unique_databases_and_mirrors():
@@ -733,6 +639,7 @@ def get_unique_databases_and_mirrors():
     test_databases = collections.OrderedDict(test_databases)
     return test_databases, mirrored_aliases
 
+
 # Change to Django 1.9
 def setup_databases(verbosity, interactive, keepdb=False, parallel=0, **kwargs):
 
@@ -775,8 +682,5 @@ def setup_databases(verbosity, interactive, keepdb=False, parallel=0, **kwargs):
         connections[alias].creation.set_as_test_mirror(
             connections[mirror_alias].settings_dict)
 
-    # if debug_sql:
-    #     for alias in connections:
-    #         connections[alias].force_debug_cursor = True
 
     return old_names

@@ -1,6 +1,4 @@
 #!/usr/bin/env python
-from __future__ import division
-
 import logging
 import os
 import shutil
@@ -8,12 +6,21 @@ import subprocess
 import sys
 import tempfile
 import warnings
+from argparse import ArgumentParser
 
 import django
 from django import contrib
-from django.utils.deprecation import RemovedInDjango18Warning, RemovedInDjango19Warning
-from django.utils._os import upath
+from django.apps import apps
+from django.conf import settings
+from django.db import connection
+from django.test import TestCase, TransactionTestCase
+from django.test.runner import default_test_processes
+from django.test.utils import get_runner
 from django.utils import six
+from django.utils._os import upath
+from django.utils.deprecation import (
+    RemovedInDjango19Warning, RemovedInDjango18Warning,
+)
 
 
 warnings.simplefilter("default", RemovedInDjango19Warning)
@@ -29,31 +36,24 @@ RUNTESTS_DIR = os.path.abspath(os.path.dirname(upath(__file__)))
 TEMP_DIR = tempfile.mkdtemp(prefix='django_')
 os.environ['DJANGO_TEST_TEMP_DIR'] = TEMP_DIR
 
+
+
 SUBDIRS_TO_SKIP = [
     'data',
+    'import_error_package',
     'test_discovery_sample',
     'test_discovery_sample2',
     'test_runner_deprecation_app',
-    'test_runner_invalid_app',
 ]
 
 ALWAYS_INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.auth',
     'django.contrib.sites',
-    'django.contrib.flatpages',
-    'django.contrib.redirects',
     'django.contrib.sessions',
     'django.contrib.messages',
-    'django.contrib.comments',
     'django.contrib.admin.apps.SimpleAdminConfig',
-    'django.contrib.admindocs',
     'django.contrib.staticfiles',
-    'django.contrib.humanize',
-    'staticfiles_tests',
-    'staticfiles_tests.apps.test',
-    'staticfiles_tests.apps.no_label',
-    'servers.another_app',
 ]
 
 ALWAYS_MIDDLEWARE_CLASSES = (
@@ -63,6 +63,15 @@ ALWAYS_MIDDLEWARE_CLASSES = (
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
 )
+
+# Need to add the associated contrib app to INSTALLED_APPS in some cases to
+# avoid "RuntimeError: Model class X doesn't declare an explicit app_label
+# and either isn't in an application in INSTALLED_APPS or else was imported
+# before its application was loaded."
+CONTRIB_TESTS_TO_APPS = {
+    'flatpages_tests': 'django.contrib.flatpages',
+    'redirects_tests': 'django.contrib.redirects',
+}
 
 
 def get_test_modules():
@@ -90,11 +99,9 @@ def get_test_modules():
 
 
 def get_installed():
-    from django.apps import apps
     return [app_config.name for app_config in apps.get_app_configs()]
 
-
-def setup(verbosity, test_labels):
+def setup(verbosity, test_labels, parallel):
     from django.apps import apps
     from django.conf import settings
     from django.test import TransactionTestCase, TestCase
@@ -214,13 +221,16 @@ def teardown(state):
         setattr(settings, key, value)
 
 
-def django_tests(verbosity, interactive, failfast, test_labels):
-    from django.conf import settings
-    state = setup(verbosity, test_labels)
+def django_tests(verbosity, interactive, failfast, keepdb, test_labels, parallel):
+    state = setup(verbosity, test_labels, parallel)
     extra_tests = []
 
+    if test_labels and 'postgres_tests' in test_labels and connection.vendor != 'postgresql':
+        if verbosity >= 2:
+            print("Removed postgres_tests from tests as we're not running with PostgreSQL.")
+        test_labels.remove('postgres_tests')
+
     # Run the test suite, including the extra validation tests.
-    from django.test.utils import get_runner
     if not hasattr(settings, 'TEST_RUNNER'):
         settings.TEST_RUNNER = 'django.test.runner.DiscoverRunner'
     TestRunner = get_runner(settings)
@@ -229,6 +239,8 @@ def django_tests(verbosity, interactive, failfast, test_labels):
         verbosity=verbosity,
         interactive=interactive,
         failfast=failfast,
+        keepdb=keepdb,
+        parallel=parallel,
     )
     # Catch warnings thrown in test DB setup -- remove in Django 1.9
     with warnings.catch_warnings():
@@ -243,11 +255,6 @@ def django_tests(verbosity, interactive, failfast, test_labels):
             'initial_data fixtures are deprecated. Use data migrations instead.',
             RemovedInDjango19Warning
         )
-        warnings.filterwarnings(
-            'ignore',
-            'IPAddressField has been deprecated. Use GenericIPAddressField instead.',
-            RemovedInDjango19Warning
-        )
         failures = test_runner.run_tests(
             test_labels or get_installed(), extra_tests=extra_tests)
 
@@ -255,8 +262,8 @@ def django_tests(verbosity, interactive, failfast, test_labels):
     return failures
 
 
-def bisect_tests(bisection_label, options, test_labels):
-    state = setup(int(options.verbosity), test_labels)
+def bisect_tests(bisection_label, options, test_labels, parallel):
+    state = setup(options.verbosity, test_labels,parallel)
 
     test_labels = test_labels or get_installed()
 
@@ -313,8 +320,8 @@ def bisect_tests(bisection_label, options, test_labels):
     teardown(state)
 
 
-def paired_tests(paired_test, options, test_labels):
-    state = setup(int(options.verbosity), test_labels)
+def paired_tests(paired_test, options, test_labels, parallel):
+    state = setup(options.verbosity, test_labels, parallel)
 
     test_labels = test_labels or get_installed()
 
@@ -350,44 +357,42 @@ def paired_tests(paired_test, options, test_labels):
 
 
 if __name__ == "__main__":
-    from optparse import OptionParser
-    usage = "%prog [options] [module module module ...]"
-    parser = OptionParser(usage=usage)
-    parser.add_option(
-        '-v', '--verbosity', action='store', dest='verbosity', default='1',
-        type='choice', choices=['0', '1', '2', '3'],
-        help='Verbosity level; 0=minimal output, 1=normal output, 2=all '
-             'output')
-    parser.add_option(
-        '--noinput', action='store_false', dest='interactive', default=True,
-        help='Tells Django to NOT prompt the user for input of any kind.')
-    parser.add_option(
-        '--failfast', action='store_true', dest='failfast', default=False,
-        help='Tells Django to stop running the test suite after first failed '
-             'test.')
-    parser.add_option(
-        '--settings',
-        help='Python path to settings module, e.g. "myproject.settings". If '
-             'this isn\'t provided, the DJANGO_SETTINGS_MODULE environment '
-             'variable will be used.')
-    parser.add_option(
-        '--bisect', action='store', dest='bisect', default=None,
-        help='Bisect the test suite to discover a test that causes a test '
-             'failure when combined with the named test.')
-    parser.add_option(
-        '--pair', action='store', dest='pair', default=None,
-        help='Run the test suite in pairs with the named test to find problem '
-             'pairs.')
-    parser.add_option(
-        '--liveserver', action='store', dest='liveserver', default=None,
-        help='Overrides the default address where the live server (used with '
-             'LiveServerTestCase) is expected to run from. The default value '
-             'is localhost:8081.')
-    parser.add_option(
-        '--selenium', action='store_true', dest='selenium',
-        default=False,
-        help='Run the Selenium tests as well (if Selenium is installed)')
-    options, args = parser.parse_args()
+    parser = ArgumentParser(description="Run the Django test suite.")
+    parser.add_argument('modules', nargs='*', metavar='module',
+                        help='Optional path(s) to test modules; e.g. "i18n" or '
+                             '"i18n.tests.TranslationTests.test_lazy_objects".')
+    parser.add_argument('-v', '--verbosity', default=1, type=int, choices=[0, 1, 2, 3],
+                        help='Verbosity level; 0=minimal output, 1=normal output, 2=all output')
+    parser.add_argument('--noinput', action='store_false', dest='interactive', default=True,
+                        help='Tells Django to NOT prompt the user for input of any kind.')
+    parser.add_argument('--failfast', action='store_true', dest='failfast', default=False,
+                        help='Tells Django to stop running the test suite after first failed '
+                             'test.')
+    parser.add_argument(
+                        '-k', '--keepdb', action='store_true', dest='keepdb', default=False,
+                        help='Tells Django to preserve the test database between runs.')
+    parser.add_argument(
+                        '--settings',
+                        help='Python path to settings module, e.g. "myproject.settings". If '
+                             'this isn\'t provided, either the DJANGO_SETTINGS_MODULE '
+                             'environment variable or "test_sqlite" will be used.')
+    parser.add_argument('--bisect',
+                        help='Bisect the test suite to discover a test that causes a test'
+                             ' failure when combined with the named test.')
+    parser.add_argument('--pair',
+                        help='Run the test suite in pairs with the named test to find problem pairs.')
+    parser.add_argument('--liveserver',
+                        help='Overrides the default address where the live server (used with '
+                             'LiveServerTestCase) is expected to run from. The default value '
+                             'is localhost:8081.')
+    parser.add_argument(
+                        '--selenium', action='store_true', dest='selenium', default=False,
+                        help='Run the Selenium tests as well (if Selenium is installed)')
+    parser.add_argument('--parallel', dest='parallel', nargs='?', default=0, type=int,
+                        const=4, metavar='N',
+                        help='Run tests using up to N parallel processes.')
+    options = parser.parse_args()
+
     if options.settings:
         os.environ['DJANGO_SETTINGS_MODULE'] = options.settings
     else:
@@ -402,11 +407,12 @@ if __name__ == "__main__":
         os.environ['DJANGO_SELENIUM_TESTS'] = '1'
 
     if options.bisect:
-        bisect_tests(options.bisect, options, args)
+        bisect_tests(options.bisect, options, options.modules)
     elif options.pair:
-        paired_tests(options.pair, options, args)
+        paired_tests(options.pair, options, options.modules)
     else:
-        failures = django_tests(int(options.verbosity), options.interactive,
-                                options.failfast, args)
+        failures = django_tests(options.verbosity, options.interactive,
+                                options.failfast, options.keepdb,
+                                options.modules, options.parallel)
         if failures:
             sys.exit(bool(failures))
